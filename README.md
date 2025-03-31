@@ -8,41 +8,33 @@ The analyses in R produced 2,624 lines of code and can be accessed through GitHu
 2.  Load data
 3.  Variable selection
 4.  Missingness diagnostics
-	4.1 Investigating missingness in scales 
- 
-	**4.2** Investigating missingness in items
- 
-	**4.3** Visualization and statistical tests 
- 
-
-**5** Multiple imputation
-	**5.1** Identify and select auxiliary variables 
-	**5.2** Split dataset with one plausible value each 
-	**5.3** Split dataset by country 
-	**5.4** Run test imputation 
-		**5.4.1** Test imputation diagnostics
-	**5.5** Run full imputation
-		**5.5.1** Full imputation restructuring 
-		**5.5.2** Full imputation diagnostics
-
-**6** Multicollinearity diagnostics 
-
-**7** Main analysis
-	**7.1** Create survey design 
-	**7.2** Regression analysis
-	**7.3** Model comparison
-	**7.4** Calculate R2
-	**7.5** Linear model assumptions
- 		**7.5.1** Normality assumption 
-   		**7.5.2** Homoscedasticity assumption 
-     		**7.5.3** Linearity assumption 
-
-**8** Investigating outliers
-	**8.1** Before imputation
-	**8.2** After imputation
-
-**9** Statistics 
-	**9.1** Mean and standard deviation
-	**9.2** Skewness and kurtosis 
-	**9.3** Correlation
-	**9.4** Sample sizes
+5.  Investigating missingness in scales
+6.  Investigating missingness in items
+7.  Visualization and statistical tests
+8.  Multiple imputation
+9.  Identify and select auxiliary variables
+10. Split dataset with one plausible value each
+11. Split dataset by country
+12. Run test imputation
+13. Test imputation diagnostics
+14. Run full imputation
+15. Full imputation restructuring
+16. Full imputation diagnostics
+17. Multicollinearity diagnostics
+18. Main analysis
+19. Create survey design
+20. Regression analysis
+21. Model comparison
+22. Calculate R2
+23. Linear model assumptions
+24. Normality assumption
+25. Homoscedasticity assumption
+26. Linearity assumption
+27. Investigating outliers
+28. Before imputation
+29. After imputation
+30. Statistics
+31. Mean and standard deviation
+32. Skewness and kurtosis
+33. Correlation
+34. Sample sizes
