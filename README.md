@@ -8,7 +8,7 @@ The analyses in R produced 2,624 lines of code and can be accessed through GitHu
 2.  Load data
 3.  Variable selection
 4.  Missingness diagnostics
-4.1  Investigating missingness in scales
+5.  Investigating missingness in scales
 6.  Investigating missingness in items
 7.  Visualization and statistical tests
 8.  Multiple imputation
