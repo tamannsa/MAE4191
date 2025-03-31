@@ -4,15 +4,11 @@ Master thesis code
 
 The analyses in R produced 2,624 lines of code and can be accessed through GitHub. The OBD analyses were conducted in Excel using equation (3) found in the main master thesis document. The main workflow is outlined below.
 
-**1** Packages 
-
-**2** Load data 
-
-**3** Variable selection 
-
-**4** Missingness diagnostics 
-
-	**4.1** Investigating missingness in scales 
+1.  Packages
+2.  Load data
+3.  Variable selection
+4.  Missingness diagnostics
+	4.1 Investigating missingness in scales 
  
 	**4.2** Investigating missingness in items
  
