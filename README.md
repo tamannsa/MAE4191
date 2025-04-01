@@ -2,39 +2,39 @@
 
 Master thesis code
 
-The analyses in R produced 2,624 lines of code and can be accessed through GitHub. The OBD analyses were conducted in Excel using equation (3) found in the main master thesis document. The main workflow is outlined below.
+The analyses in R produced 2,600 lines of code and can be accessed through the R-file **4191_final_coding**. The OBD analyses were conducted in Excel using equation (3) found in the main master thesis document. The main workflow is outlined below.
 
 1.  Packages
 2.  Load data
 3.  Variable selection
 4.  Missingness diagnostics
-5.  Investigating missingness in scales
-6.  Investigating missingness in items
-7.  Visualization and statistical tests
+- Investigating missingness in scales
+- Investigating missingness in items
+- Visualization and statistical tests
 8.  Multiple imputation
-9.  Identify and select auxiliary variables
-10. Split dataset with one plausible value each
-11. Split dataset by country
-12. Run test imputation
-13. Test imputation diagnostics
-14. Run full imputation
-15. Full imputation restructuring
-16. Full imputation diagnostics
-17. Multicollinearity diagnostics
-18. Main analysis
-19. Create survey design
-20. Regression analysis
-21. Model comparison
-22. Calculate R2
-23. Linear model assumptions
-24. Normality assumption
-25. Homoscedasticity assumption
-26. Linearity assumption
-27. Investigating outliers
-28. Before imputation
-29. After imputation
-30. Statistics
-31. Mean and standard deviation
-32. Skewness and kurtosis
-33. Correlation
-34. Sample sizes
+- Identify and select auxiliary variables
+- Split dataset with one plausible value each
+- Split dataset by country
+- Run test imputation
+  - Test imputation diagnostics
+- Run full imputation
+  - Full imputation restructuring
+  - Full imputation diagnostics
+9.  Multicollinearity diagnostics
+10. Main analysis
+- Create survey design
+- Regression analysis
+- Model comparison
+- Calculate R2
+11. Linear model assumptions
+- Normality assumption
+- Homoscedasticity assumption
+- Linearity assumption
+12. Investigating outliers
+- Before imputation
+- After imputation
+13. Statistics
+- Mean and standard deviation
+- Skewness and kurtosis
+- Correlation
+- Sample sizes
