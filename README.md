@@ -2,7 +2,7 @@
 
 Master thesis code
 
-The analyses in R produced 2,600 lines of code and can be accessed through the R-file **4191_final_coding**. The OBD analyses were conducted in Excel using equation (3) found in the main master thesis document. The main workflow is outlined below.
+The analyses in R produced 2,600 lines of code and can be accessed through the R-file **4191_final_coding**. The OBD analyses were conducted in Excel and can be found here at GitHub under the name OBD. The main workflow is outlined below.
 
 1.  Packages
 2.  Load data
