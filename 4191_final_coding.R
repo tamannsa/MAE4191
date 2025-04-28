@@ -126,7 +126,7 @@ analyze_weighted_predictors <- function(data, predictors) {
       data = data,
       repweights = data[rep_weights], # Replicate weights
       type = "Fay", # Fay's method for variance estimation
-      rho = 0.5 # Common choice for Fay's adjustment
+      rho = 0.5 # Fay's adjustment
     )
     # Compute the weighted proportion of missing values for each predictor
     missing_prop <- svymean(~is.na(get(pred)), design, na.rm = TRUE)
@@ -279,17 +279,17 @@ Master_data <- CY08MSP_STU_QQQ %>%
 # Remove CY08MSP_STU_QQQ to open up local memory
 rm(CY08MSP_STU_QQQ)
 
-# Summary of missing values for key variables
-missing_summary <- colSums(
-  is.na(Master_data[, c(
-      "RELATST", "GROSAGR", 
-      "DISCLIM", "MATHEFF", 
-      "MATHEF21", "MATHPERS", 
-      "ANXMAT")
-      ]
-    )
-  )
-print(missing_summary)
+# Calculate percentage of missing values for variables by country
+missing_summary_by_country <- Master_data %>%
+  group_by(CNT) %>%
+  summarise(across(
+    c(RELATST, GROSAGR, DISCLIM, MATHEFF, MATHEF21, MATHPERS, ANXMAT),
+    ~ round(mean(is.na(.)) * 100, 2)  # Multiply by 100 to get percentage
+  ),
+  .groups = 'drop')
+
+# Print the result
+print(missing_summary_by_country)
 
 # Function to check missingness patterns
 check_specific_codes <- function(variable) {
@@ -402,6 +402,9 @@ Master_data <- Master_data %>%
 # Complete cases
 # =============================================================================
 
+# Complete cases in total
+# -----------------------------------------------------------------------------
+
 # Subset for variables of interest
 df_select <- Master_data[,c("RELATST", "GROSAGR", "DISCLIM", "MATHEFF", "MATHEF21", "MATHPERS", "ANXMAT")]
 # Count the number of rows with complete data
@@ -412,6 +415,23 @@ percentage_complete <- (num_complete_cases / total_students) * 100
 # Print the result
 cat(sprintf("Number of students with complete data: %d (%.2f%%)\n", 
             num_complete_cases, percentage_complete))
+
+# Complete cases per country
+# -----------------------------------------------------------------------------
+
+# Count complete cases by country
+complete_cases_by_country <- Master_data %>%
+  select(CNT, RELATST, GROSAGR, DISCLIM, MATHEFF, MATHEF21, MATHPERS, ANXMAT) %>%
+  group_by(CNT) %>%
+  summarise(
+    n_students = n(),
+    n_complete = sum(complete.cases(across(c(RELATST, GROSAGR, DISCLIM, MATHEFF, MATHEF21, MATHPERS, ANXMAT)))),
+    perc_complete = round((n_complete / n_students) * 100, 2),
+    .groups = 'drop'
+  )
+
+# Print the results
+print(complete_cases_by_country)
 
 # =============================================================================
 # Missing Data Visualization and Little`s MCAR test
@@ -431,27 +451,27 @@ mcar_test(data=df_select)
 # Cleaning the data by removing haven labels
 Master_data <- as.data.frame(lapply(Master_data, haven::zap_labels))
 
-# Missing data analysis (modified based on singularity issues)
+# Missing data analysis
 analyze_missing_data_survey <- function(data, vars, weights, strata_var, psu_var) {
   ## Step 1: Create working dataset by selecting relevant variables
   df_select <- data[, c(vars, weights, strata_var, psu_var)]
   ## Step 2: Count the number of PSUs per stratum
-  psu_counts <- table(df_select[[strata_var]])
-  small_strata <- names(psu_counts[psu_counts < 3]) # Identify strata with fewer than 3 PSUs
-  ## Step 3: Combine small strata into one category for better analysis
-  df_select$stratum_modified <- df_select[[strata_var]]
-  df_select$stratum_modified[df_select[[strata_var]] %in% small_strata] <- "combined_small_strata"
+  psu_counts_by_stratum <- table(df_select[[strata_var]], df_select[[psu_var]])
+  strata_psu_counts <- rowSums(psu_counts_by_stratum > 0)
+  small_strata <- names(strata_psu_counts[strata_psu_counts < 2])
+  ## Step 3: Remove PSUs in strata with insufficient PSUs
+  df_filtered <- df_select[!df_select[[strata_var]] %in% small_strata, ]
   ## Step 4: Create missingness indicators for each variable
   for(var in vars) {
-    df_select[[paste0(var, "_missing")]] <- as.numeric(is.na(df_select[[var]])) # 1 if missing, 0 if not
+    df_filtered[[paste0(var, "_missing")]] <- as.numeric(is.na(df_filtered[[var]])) # 1 if missing, 0 if not
   }
-  ## Step 5: Define survey design with modified strata
-  options(survey.lonely.psu = "certainty") # Change handling of single PSUs to "certainty"
+  ## Step 5: Define survey design (using original strata, not modified)
   survey_design <- svydesign(
     id = as.formula(paste0("~", psu_var)), # Primary sampling unit (PSU)
-    strata = ~stratum_modified, # Stratification variable (modified for small strata)
-    weights = as.formula(paste0("~", weights)), # Survey weights (Final trimmed nonresponse adjusted student weight)
-    data = df_select # The data to use
+    strata = as.formula(paste0("~", strata_var)), # Original stratification variable
+    weights = as.formula(paste0("~", weights)), # Survey weights
+    data = df_filtered, # The filtered data excluding problematic PSUs
+    nest = TRUE
   )
   ## Step 6: Loop through all variables to perform analysis
   for(var in vars) {
@@ -1176,141 +1196,6 @@ for (country in countries) {
 }
 
 #######################################
-#         MULTICOLLINEARITY           #
-#######################################
-
-calculate_vif_tolerance <- function(data, country_name) {
-  # Create survey design using existing function
-  design <- create_survey_design(data, country_name)
-  # Create a formula with all predictors
-  formula_str <- "MATH_PV ~ ANXMAT + MATHPERS + MATHEFF + DISCLIM + GROSAGR + RELATST" # + ESCS + IMMIG + MATHEF21"
-  formula_obj <- as.formula(formula_str)
-  # Fit survey-weighted linear model
-  model <- svyglm(formula_obj, design = design)
-  # Calculate VIF
-  vif_values <- car::vif(model)
-  # Calculate tolerance values (1/VIF)
-  tolerance_values <- 1 / vif_values
-  # Return as list
-  return(list(
-    vif = vif_values,
-    tolerance = tolerance_values
-  ))
-}
-
-# -----------------------------------------------------------------------------
-
-# Function to apply Rubin's Rules to VIF values
-pool_vif_with_rubin <- function(vif_list) {
-    # Extract variable names from the first result
-      var_names <- names(vif_list[[1]]$vif)
-        # Initialize result matrices
-        n_vars <- length(var_names)
-        n_imputations <- length(vif_list)
-          # Matrix to store VIF values from each imputation
-          vif_matrix <- matrix(NA, nrow = n_imputations, ncol = n_vars)
-          colnames(vif_matrix) <- var_names
-            # Matrix to store tolerance values from each imputation
-            tolerance_matrix <- matrix(NA, nrow = n_imputations, ncol = n_vars)
-            colnames(tolerance_matrix) <- var_names
-              # Fill matrices with values from each imputation
-              for (i in 1:n_imputations) {
-                vif_matrix[i, ] <- vif_list[[i]]$vif
-                tolerance_matrix[i, ] <- vif_list[[i]]$tolerance
-                }
-              # Calculate pooled results using Rubin's rules
-              # For VIF and tolerance, we use the mean across imputations
-              pooled_vif <- colMeans(vif_matrix)
-                # Calculate within-imputation variance
-                # For VIF we're not working with standard errors, so we calculate variances directly
-                within_var_vif <- apply(vif_matrix, 2, var) * (n_imputations - 1) / n_imputations
-                  # Calculate between-imputation variance
-                  between_var_vif <- apply(vif_matrix, 2, function(x) var(x))
-                    # Total variance using Rubin's formula
-                    total_var_vif <- within_var_vif + between_var_vif + (between_var_vif / n_imputations)
-                      # Standard errors
-                      se_vif <- sqrt(total_var_vif)
-                        # Repeat for tolerance
-                        pooled_tolerance <- colMeans(tolerance_matrix)
-                        within_var_tolerance <- apply(tolerance_matrix, 2, var) * (n_imputations - 1) / n_imputations
-                        between_var_tolerance <- apply(tolerance_matrix, 2, function(x) var(x))
-                        total_var_tolerance <- within_var_tolerance + between_var_tolerance + (between_var_tolerance / n_imputations)
-                        se_tolerance <- sqrt(total_var_tolerance)
-                          # Create results data frame
-                          results <- data.frame(
-                            Variable = var_names,
-                            VIF = pooled_vif,
-                            VIF_SE = se_vif,
-                            Tolerance = pooled_tolerance,
-                            Tolerance_SE = se_tolerance
-                            )
-                            return(results)
-}
-
-# -----------------------------------------------------------------------------
-
-# Function to calculate VIF across all imputations for a country using Rubin's Rules
-calculate_country_vif_with_rubins <- function(imputation_results, country) {
-    all_vif_results <- list()
-      # Loop through all combinations of PVs and imputations
-      for (pv in 1:10) {
-        for (imp in 1:10) {
-          # Get the current imputed dataset
-            data <- imputation_results[[country]][[pv]][[imp]]
-              # Calculate VIF and tolerance
-              vif_result <- calculate_vif_tolerance(data, country)
-                # Store the result
-                all_vif_results <- append(all_vif_results, list(vif_result))
-                }
-        }
-      # Apply Rubin's Rules to pool results across imputations
-      pooled_results <- pool_vif_with_rubin(all_vif_results)
-        # Add country information
-        pooled_results$Country <- country
-          return(pooled_results)
-}
-
-# -----------------------------------------------------------------------------
-
-# Function to run multicollinearity diagnostics for all countries
-run_multicollinearity_diagnostics <- function(imputation_results, countries) {
-    # Initialize list to store results
-      vif_results_by_country <- list()
-        # Run VIF analysis for each country
-        for (country in countries) {
-          vif_results_by_country[[country]] <- calculate_country_vif_with_rubins(imputation_results, country)
-          # Print progress
-            cat("Completed VIF analysis for", country, "\n")
-          }
-        # Combine all results into a single data frame
-        all_results <- do.call(rbind, vif_results_by_country)
-          # Create a summary table with interpretation
-          summary_table <- all_results
-          summary_table$Multicollinearity <- "No concern"
-          summary_table$Multicollinearity[summary_table$VIF > 5] <- "Moderate concern"
-          summary_table$Multicollinearity[summary_table$VIF > 10] <- "High concern"
-            # Add confidence intervals (using 1.96 * SE for approximate 95% CI)
-            summary_table$VIF_CI_Lower <- summary_table$VIF - 1.96 * summary_table$VIF_SE
-            summary_table$VIF_CI_Upper <- summary_table$VIF + 1.96 * summary_table$VIF_SE
-            summary_table$Tolerance_CI_Lower <- summary_table$Tolerance - 1.96 * summary_table$Tolerance_SE
-            summary_table$Tolerance_CI_Upper <- summary_table$Tolerance + 1.96 * summary_table$Tolerance_SE
-              # Return both detailed and summary results
-              return(list(
-                detailed_results = all_results,
-                summary = summary_table
-                ))
-}
-
-# -----------------------------------------------------------------------------
-
-# Run the analysis
-countries <- c("NOR", "SWE", "DNK", "FIN", "CHE")
-multicollinearity_results <- run_multicollinearity_diagnostics(imputation_results, countries)
-
-# Print summary results
-print(multicollinearity_results$summary)
-
-#######################################
 #            MAIN ANALYSIS            #
 #######################################
 
@@ -1326,20 +1211,16 @@ create_survey_design <- function(data, country) {
   }
   # Identify strata and PSU distribution
   stratum_psu_counts <- table(country_data$STRATUM, country_data$CNTSCHID)
-  # Determine which strata have insufficient PSUs
+  # Determine which strata have insufficient PSUs (less than 2 PSUs)
   strata_with_insufficient_psus <- rownames(stratum_psu_counts)[rowSums(stratum_psu_counts > 0) < 2]
-  # Modify strata when necessary
+  # Filter out observations from strata with insufficient PSUs
   if (length(strata_with_insufficient_psus) > 0) {
-    country_data$MODIFIED_STRATUM <- ifelse(
-      country_data$STRATUM %in% strata_with_insufficient_psus, 
-      "GENERIC_STRATUM", 
-      as.character(country_data$STRATUM)
-    )
+    filtered_data <- country_data[!country_data$STRATUM %in% strata_with_insufficient_psus, ]
     design <- svydesign(
       ids = ~CNTSCHID,
       weights = ~W_FSTUWT,
-      strata = ~MODIFIED_STRATUM,
-      data = country_data,
+      strata = ~STRATUM,
+      data = filtered_data,
       nest = TRUE,
       repweights = "W_FSTURWT[1-80]+",
       type = "Fay",
@@ -1348,6 +1229,7 @@ create_survey_design <- function(data, country) {
       rscales = 1
     )
   } else {
+    # If no strata have insufficient PSUs, use all data
     design <- svydesign(
       ids = ~CNTSCHID,
       weights = ~W_FSTUWT,
@@ -1588,7 +1470,7 @@ calculate_r2_survey <- function(model) {
 
 # -----------------------------------------------------------------------------
 
-# Function to pool based on averages. 
+# Function to pool based on averages 
 # Rubin`s Rules do not apply for non-normally distributed estimates 
 pool_r2 <- function(r2_values) {
   pooled_r2 <- mean(r2_values)
@@ -1899,6 +1781,141 @@ saveRDS(homoscedasticity_tests, "pisa_homoscedasticity_tests.rds")
 saveRDS(linearity_checks, "pisa_linearity_checks.rds")
 
 #######################################
+#         MULTICOLLINEARITY           #
+#######################################
+
+calculate_vif_tolerance <- function(data, country_name) {
+  # Create survey design using existing function
+  design <- create_survey_design(data, country_name)
+  # Create a formula with all predictors
+  formula_str <- "MATH_PV ~ ANXMAT + MATHPERS + MATHEFF + DISCLIM + GROSAGR + RELATST" # + ESCS + IMMIG + MATHEF21"
+  formula_obj <- as.formula(formula_str)
+  # Fit survey-weighted linear model
+  model <- svyglm(formula_obj, design = design)
+  # Calculate VIF
+  vif_values <- car::vif(model)
+  # Calculate tolerance values (1/VIF)
+  tolerance_values <- 1 / vif_values
+  # Return as list
+  return(list(
+    vif = vif_values,
+    tolerance = tolerance_values
+  ))
+}
+
+# -----------------------------------------------------------------------------
+
+# Function to apply Rubin's Rules to VIF values
+pool_vif_with_rubin <- function(vif_list) {
+  # Extract variable names from the first result
+  var_names <- names(vif_list[[1]]$vif)
+  # Initialize result matrices
+  n_vars <- length(var_names)
+  n_imputations <- length(vif_list)
+  # Matrix to store VIF values from each imputation
+  vif_matrix <- matrix(NA, nrow = n_imputations, ncol = n_vars)
+  colnames(vif_matrix) <- var_names
+  # Matrix to store tolerance values from each imputation
+  tolerance_matrix <- matrix(NA, nrow = n_imputations, ncol = n_vars)
+  colnames(tolerance_matrix) <- var_names
+  # Fill matrices with values from each imputation
+  for (i in 1:n_imputations) {
+    vif_matrix[i, ] <- vif_list[[i]]$vif
+    tolerance_matrix[i, ] <- vif_list[[i]]$tolerance
+  }
+  # Calculate pooled results using Rubin's rules
+  # For VIF and tolerance, we use the mean across imputations
+  pooled_vif <- colMeans(vif_matrix)
+  # Calculate within-imputation variance
+  # For VIF we're not working with standard errors, so we calculate variances directly
+  within_var_vif <- apply(vif_matrix, 2, var) * (n_imputations - 1) / n_imputations
+  # Calculate between-imputation variance
+  between_var_vif <- apply(vif_matrix, 2, function(x) var(x))
+  # Total variance using Rubin's formula
+  total_var_vif <- within_var_vif + between_var_vif + (between_var_vif / n_imputations)
+  # Standard errors
+  se_vif <- sqrt(total_var_vif)
+  # Repeat for tolerance
+  pooled_tolerance <- colMeans(tolerance_matrix)
+  within_var_tolerance <- apply(tolerance_matrix, 2, var) * (n_imputations - 1) / n_imputations
+  between_var_tolerance <- apply(tolerance_matrix, 2, function(x) var(x))
+  total_var_tolerance <- within_var_tolerance + between_var_tolerance + (between_var_tolerance / n_imputations)
+  se_tolerance <- sqrt(total_var_tolerance)
+  # Create results data frame
+  results <- data.frame(
+    Variable = var_names,
+    VIF = pooled_vif,
+    VIF_SE = se_vif,
+    Tolerance = pooled_tolerance,
+    Tolerance_SE = se_tolerance
+  )
+  return(results)
+}
+
+# -----------------------------------------------------------------------------
+
+# Function to calculate VIF across all imputations for a country using Rubin's Rules
+calculate_country_vif_with_rubins <- function(imputation_results, country) {
+  all_vif_results <- list()
+  # Loop through all combinations of PVs and imputations
+  for (pv in 1:10) {
+    for (imp in 1:10) {
+      # Get the current imputed dataset
+      data <- imputation_results[[country]][[pv]][[imp]]
+      # Calculate VIF and tolerance
+      vif_result <- calculate_vif_tolerance(data, country)
+      # Store the result
+      all_vif_results <- append(all_vif_results, list(vif_result))
+    }
+  }
+  # Apply Rubin's Rules to pool results across imputations
+  pooled_results <- pool_vif_with_rubin(all_vif_results)
+  # Add country information
+  pooled_results$Country <- country
+  return(pooled_results)
+}
+
+# -----------------------------------------------------------------------------
+
+# Function to run multicollinearity diagnostics for all countries
+run_multicollinearity_diagnostics <- function(imputation_results, countries) {
+  # Initialize list to store results
+  vif_results_by_country <- list()
+  # Run VIF analysis for each country
+  for (country in countries) {
+    vif_results_by_country[[country]] <- calculate_country_vif_with_rubins(imputation_results, country)
+    # Print progress
+    cat("Completed VIF analysis for", country, "\n")
+  }
+  # Combine all results into a single data frame
+  all_results <- do.call(rbind, vif_results_by_country)
+  # Create a summary table with interpretation
+  summary_table <- all_results
+  summary_table$Multicollinearity <- "No concern"
+  summary_table$Multicollinearity[summary_table$VIF > 5] <- "Moderate concern"
+  summary_table$Multicollinearity[summary_table$VIF > 10] <- "High concern"
+  # Add confidence intervals (using 1.96 * SE for approximate 95% CI)
+  summary_table$VIF_CI_Lower <- summary_table$VIF - 1.96 * summary_table$VIF_SE
+  summary_table$VIF_CI_Upper <- summary_table$VIF + 1.96 * summary_table$VIF_SE
+  summary_table$Tolerance_CI_Lower <- summary_table$Tolerance - 1.96 * summary_table$Tolerance_SE
+  summary_table$Tolerance_CI_Upper <- summary_table$Tolerance + 1.96 * summary_table$Tolerance_SE
+  # Return both detailed and summary results
+  return(list(
+    detailed_results = all_results,
+    summary = summary_table
+  ))
+}
+
+# -----------------------------------------------------------------------------
+
+# Run the analysis
+countries <- c("NOR", "SWE", "DNK", "FIN", "CHE")
+multicollinearity_results <- run_multicollinearity_diagnostics(imputation_results, countries)
+
+# Print summary results
+print(multicollinearity_results$summary)
+
+#######################################
 #              OUTLIERS               #
 #######################################
 
@@ -1929,10 +1946,10 @@ for (country in countries) {
 }
 
 # =============================================================================
-# Before imputations - statistical inspection
+# Before imputations - statistical inspection using Cook's distance
 # =============================================================================
 
-# List of variables to analyze
+# List of variables to analyze in the regression
 variables <- c("ANXMAT", "MATHPERS", "MATHEFF", "DISCLIM",
                "GROSAGR", "RELATST") # "MATHEF21", "IMMIG", "ESCS")
 
@@ -1942,132 +1959,190 @@ countries <- c("NOR", "SWE", "DNK", "FIN", "CHE")
 # Initialize the data frame to store pre-imputation outlier results
 pre_imputation_outliers <- data.frame(
   Country = character(),
-  Variable = character(),
   Count = integer(),
   Percentage = numeric(),
-  Min_Z_Score = numeric(),
-  Max_Z_Score = numeric(),
+  Max_Cooks_D = numeric(),
   stringsAsFactors = FALSE
 )
 
 # -----------------------------------------------------------------------------
 
-# Function to calculate z-scores and identify outliers
-analyze_outliers <- function(data, variable) {
-  # Skip if the variable does not exist in the data
-  if (!variable %in% names(data)) {
-    warning(paste("Variable", variable, "not found in dataset"))
+# Function to calculate Cook's distance and identify outliers using any of the math PVs
+analyze_cooks_outliers <- function(data) {
+  # Find the first available math PV variable
+  math_pv_vars <- grep("PV[0-9]+MATH", names(data), value = TRUE)
+  
+  if (length(math_pv_vars) == 0) {
+    warning("No math PV variables found in the dataset")
     return(NULL)
   }
-  # Skip if there are no non-NA values
-  if (sum(!is.na(data[[variable]])) == 0) {
-    warning(paste("No valid data for variable", variable))
+  
+  # Use the first PV for analysis
+  math_var <- math_pv_vars[1]
+  cat("Using math variable:", math_var, "\n")
+  
+  # Check if all necessary variables exist
+  if (!all(variables %in% names(data))) {
+    missing_vars <- setdiff(variables, names(data))
+    warning(paste("Missing variables:", paste(missing_vars, collapse=", ")))
     return(NULL)
   }
-  # Calculate z-scores
-  mean_val <- mean(data[[variable]], na.rm = TRUE)
-  sd_val <- sd(data[[variable]], na.rm = TRUE)
-  # Check for zero standard deviation
-  if (sd_val == 0 || is.na(sd_val)) {
-    warning(paste("Zero or NA standard deviation for variable", variable))
+  
+  # Create a formula for the regression model
+  formula_str <- paste(math_var, "~", paste(variables, collapse = " + "))
+  formula_obj <- as.formula(formula_str)
+  
+  # Remove NA values for regression
+  model_vars <- c(math_var, variables)
+  complete_data <- data[complete.cases(data[model_vars]), ]
+  
+  # Check if there's enough data for regression
+  if (nrow(complete_data) <= length(variables) + 1) {
+    warning("Not enough complete cases for regression")
     return(NULL)
   }
-  z_scores <- (data[[variable]] - mean_val) / sd_val
-  # Identify outliers (|z| > 3)
-  outliers <- which(abs(z_scores) > 3)
-  # Return outlier indices and their z-scores
-  if(length(outliers) > 0) {
-    return(data.frame(
-      index = outliers,
-      value = data[[variable]][outliers],
-      z_score = z_scores[outliers]
-    ))
-  } else {
+  
+  # Try to fit the model
+  tryCatch({
+    # Fit the regression model using the dynamic formula
+    model <- lm(formula_obj, data = complete_data)
+    
+    # Calculate Cook's distance
+    cooks_d <- cooks.distance(model)
+    
+    # Identify outliers (Cook's D > 4/n)
+    threshold <- 4/length(cooks_d)
+    outliers <- which(cooks_d > threshold)
+    
+    # Return outlier indices and their Cook's distance
+    if(length(outliers) > 0) {
+      return(data.frame(
+        index = outliers,
+        cooks_d = cooks_d[outliers]
+      ))
+    } else {
+      return(NULL)
+    }
+  }, error = function(e) {
+    warning("Error in regression model: ", e$message)
     return(NULL)
-  }
+  })
 }
 
 # -----------------------------------------------------------------------------
 
 # Analysis for pre-imputation data
-cat("\n=== Outlier Analysis Before Imputation ===\n")
+cat("\n=== Outlier Analysis Before Imputation (Cook's Distance) ===\n")
 
 for (country in countries) {
   cat("\nAnalyzing pre-imputation outliers for country:", country, "\n")
   # Subset data for the current country
   country_data <- subset(Master_data, CNT == country)
-  # Loop through each variable
-  for (var in variables) {
-    # Perform outlier analysis
-    outliers <- analyze_outliers(country_data, var)
-    # Calculate percentage of outliers
-    total_obs <- sum(!is.na(country_data[[var]]))
-    outlier_count <- ifelse(is.null(outliers), 0, nrow(outliers))
+  
+  # Perform outlier analysis using Cook's distance
+  outliers <- analyze_cooks_outliers(country_data)
+  
+  # Calculate percentage of outliers
+  if (is.null(outliers)) {
+    outlier_count <- 0
+    outlier_percentage <- 0
+    max_cooks_d <- NA
+  } else {
+    # Find the first available math PV variable
+    math_var <- grep("PV[0-9]+MATH", names(country_data), value = TRUE)[1]
+    model_vars <- c(math_var, variables)
+    total_obs <- sum(complete.cases(country_data[model_vars]))
+    outlier_count <- nrow(outliers)
     outlier_percentage <- ifelse(total_obs > 0, outlier_count / total_obs * 100, 0)
-    # Add summary to the pre_imputation_outliers data frame
-    pre_imputation_outliers <- rbind(pre_imputation_outliers, data.frame(
-      Country = country,
-      Variable = var,
-      Count = outlier_count,
-      Percentage = outlier_percentage,
-      Min_Z_Score = ifelse(is.null(outliers), NA, min(outliers$z_score)),
-      Max_Z_Score = ifelse(is.null(outliers), NA, max(outliers$z_score))
-    ))
+    max_cooks_d <- max(outliers$cooks_d)
   }
+  
+  # Add summary to the pre_imputation_outliers data frame
+  pre_imputation_outliers <- rbind(pre_imputation_outliers, data.frame(
+    Country = country,
+    Count = outlier_count,
+    Percentage = outlier_percentage,
+    Max_Cooks_D = max_cooks_d
+  ))
 }
 
 # Print summary of pre-imputation outliers
 print(pre_imputation_outliers)
 
 # Save pre-imputation outlier results
-write.csv(pre_imputation_outliers, "pre_imputation_outliers.csv", row.names = FALSE)
+write.csv(pre_imputation_outliers, "pre_imputation_cooks_outliers.csv", row.names = FALSE)
 
 # =============================================================================
-# After imputations - statistical inspection
+# After imputations - statistical inspection using Cook's distance
 # =============================================================================
 
-# Function to compute outlier statistics for a single dataset
-compute_outlier_stats <- function(data, variable) {
-  # Skip if a variable does not exist or has no valid values
-  if (!variable %in% names(data) || sum(!is.na(data[[variable]])) == 0) {
+# Function to compute Cook's distance outlier statistics for a single dataset
+compute_cooks_outlier_stats <- function(data) {
+  # Check if all necessary variables exist including MATH_PV (renamed in imputed datasets)
+  if (!all(c("MATH_PV", variables) %in% names(data))) {
+    missing_vars <- setdiff(c("MATH_PV", variables), names(data))
+    warning(paste("Missing variables in imputed dataset:", paste(missing_vars, collapse=", ")))
     return(list(
       count = 0,
       percentage = 0,
-      min_z = NA,
-      max_z = NA,
+      max_cooks_d = NA,
       variance = NA
     ))
   }
-  # Calculate z-scores
-  mean_val <- mean(data[[variable]], na.rm = TRUE)
-  sd_val <- sd(data[[variable]], na.rm = TRUE)
-  # Handle zero standard deviation
-  if (sd_val == 0 || is.na(sd_val)) {
+  
+  # Create a formula for the regression model
+  formula_obj <- as.formula(paste("MATH_PV ~", paste(variables, collapse = " + ")))
+  
+  # Remove NA values for regression
+  complete_data <- data[complete.cases(data[c("MATH_PV", variables)]), ]
+  
+  # Check if there's enough data for regression
+  if (nrow(complete_data) <= length(variables) + 1) {
+    warning("Not enough complete cases for regression in imputed dataset")
     return(list(
       count = 0,
       percentage = 0,
-      min_z = NA,
-      max_z = NA,
+      max_cooks_d = NA,
       variance = NA
     ))
   }
-  z_scores <- (data[[variable]] - mean_val) / sd_val
-  # Identify outliers (|z| > 3)
-  outliers <- which(abs(z_scores) > 3)
-  outlier_count <- length(outliers)
-  # Calculate percentage
-  total_obs <- sum(!is.na(data[[variable]]))
-  outlier_percentage <- outlier_count / total_obs * 100
-  # Calculate variance of the outlier count for Rubin's rules (binomial variance estimate)
-  variance <- (outlier_percentage * (100 - outlier_percentage)) / total_obs
-  # Return statistics
-  return(list(
-    count = outlier_count,
-    percentage = outlier_percentage,
-    min_z = ifelse(outlier_count > 0, min(abs(z_scores[outliers])), NA),
-    max_z = ifelse(outlier_count > 0, max(abs(z_scores[outliers])), NA),
-    variance = variance
-  ))
+  
+  # Try to fit the model
+  tryCatch({
+    # Fit the regression model
+    model <- lm(formula_obj, data = complete_data)
+    
+    # Calculate Cook's distance
+    cooks_d <- cooks.distance(model)
+    
+    # Identify outliers (Cook's D > 4/n)
+    threshold <- 4/length(cooks_d)
+    outliers <- which(cooks_d > threshold)
+    outlier_count <- length(outliers)
+    
+    # Calculate percentage
+    total_obs <- nrow(complete_data)
+    outlier_percentage <- outlier_count / total_obs * 100
+    
+    # Calculate variance of the outlier count for Rubin's rules (binomial variance estimate)
+    variance <- (outlier_percentage * (100 - outlier_percentage)) / total_obs
+    
+    # Return statistics
+    return(list(
+      count = outlier_count,
+      percentage = outlier_percentage,
+      max_cooks_d = ifelse(outlier_count > 0, max(cooks_d[outliers]), NA),
+      variance = variance
+    ))
+  }, error = function(e) {
+    warning("Error in regression model for imputed dataset: ", e$message)
+    return(list(
+      count = 0,
+      percentage = 0,
+      max_cooks_d = NA,
+      variance = NA
+    ))
+  })
 }
 
 # -----------------------------------------------------------------------------
@@ -2075,12 +2150,10 @@ compute_outlier_stats <- function(data, variable) {
 # Initialize results storage
 pooled_results <- data.frame(
   Country = character(),
-  Variable = character(),
   Pooled_Count = numeric(),
   Pooled_Percentage = numeric(),
   Pooled_SE = numeric(),
-  Min_Z = numeric(),
-  Max_Z = numeric(),
+  Max_Cooks_D = numeric(),
   stringsAsFactors = FALSE
 )
 
@@ -2090,66 +2163,76 @@ pooled_results <- data.frame(
 all_imputation_results <- list()
 for (country in countries) {
   cat("\nAnalyzing post-imputation outliers for country:", country, "\n")
-  for (var in variables) {
-    # Storage for this country-variable combination
-    all_stats <- list()
-    # For each PV 
-    for (pv in 1:10) {
-      # For each imputation
-      for (imp in 1:10) {
-        # Skip if the imputation dataset doesn't exist
-        if (is.null(imputation_results[[country]][[pv]][[imp]])) {
-          cat("Warning: Missing dataset for", country, "PV", pv, "Imputation", imp, "\n")
-          next
-        }
-        # Extract the imputed dataset
-        imputed_data <- imputation_results[[country]][[pv]][[imp]]
-        # Compute outlier statistics
-        stats <- compute_outlier_stats(imputed_data, var)
-        # Store results
-        all_stats[[length(all_stats) + 1]] <- stats
+  
+  # Storage for this country combination
+  all_stats <- list()
+  
+  # For each PV 
+  for (pv in 1:10) {
+    # For each imputation
+    for (imp in 1:10) {
+      # Skip if the imputation dataset doesn't exist
+      if (is.null(imputation_results[[country]][[pv]][[imp]])) {
+        cat("Warning: Missing dataset for", country, "PV", pv, "Imputation", imp, "\n")
+        next
       }
+      
+      # Extract the imputed dataset
+      imputed_data <- imputation_results[[country]][[pv]][[imp]]
+      
+      # Compute outlier statistics
+      stats <- compute_cooks_outlier_stats(imputed_data)
+      
+      # Store results
+      all_stats[[length(all_stats) + 1]] <- stats
     }
-    # Apply Rubin's rules to pool results
-    m <- length(all_stats)  # Number of imputations
-    if (m == 0) {
-      cat("Warning: No valid imputations for", country, "variable", var, "\n")
-      next
-    }
-    # Extract statistics from all imputations
-    counts <- sapply(all_stats, function(x) x$count)
-    percentages <- sapply(all_stats, function(x) x$percentage)
-    variances <- sapply(all_stats, function(x) x$variance)
-    min_zs <- sapply(all_stats, function(x) x$min_z)
-    max_zs <- sapply(all_stats, function(x) x$max_z)
-    # Calculate pooled estimates using Rubin's rules
-    pooled_percentage <- mean(percentages, na.rm = TRUE)
-    # Within-imputation variance
-    W <- mean(variances, na.rm = TRUE)
-    # Between-imputation variance
-    B <- var(percentages, na.rm = TRUE)
-    # Total variance according to Rubin's rules
-    T_var <- W + (1 + 1/m) * B
-    # Standard error
-    pooled_se <- sqrt(T_var)
-    # Calculate pooled count
-    pooled_count <- mean(counts, na.rm = TRUE)
-    # Min and max z-scores (extremes across all imputations)
-    min_z <- min(min_zs, na.rm = TRUE)
-    max_z <- max(max_zs, na.rm = TRUE)
-    # Add results to the pooled results dataframe
-    pooled_results <- rbind(pooled_results, data.frame(
-      Country = country,
-      Variable = var,
-      Pooled_Count = pooled_count,
-      Pooled_Percentage = pooled_percentage,
-      Pooled_SE = pooled_se,
-      Min_Z = min_z,
-      Max_Z = max_z
-    ))
-    # Store detailed results for debugging
-    all_imputation_results[[paste(country, var, sep = "_")]] <- all_stats
   }
+  
+  # Apply Rubin's rules to pool results
+  m <- length(all_stats)  # Number of imputations
+  if (m == 0) {
+    cat("Warning: No valid imputations for", country, "\n")
+    next
+  }
+  
+  # Extract statistics from all imputations
+  counts <- sapply(all_stats, function(x) x$count)
+  percentages <- sapply(all_stats, function(x) x$percentage)
+  variances <- sapply(all_stats, function(x) x$variance)
+  max_cooks_ds <- sapply(all_stats, function(x) x$max_cooks_d)
+  
+  # Calculate pooled estimates using Rubin's rules
+  pooled_percentage <- mean(percentages, na.rm = TRUE)
+  
+  # Within-imputation variance
+  W <- mean(variances, na.rm = TRUE)
+  
+  # Between-imputation variance
+  B <- var(percentages, na.rm = TRUE)
+  
+  # Total variance according to Rubin's rules
+  T_var <- W + (1 + 1/m) * B
+  
+  # Standard error
+  pooled_se <- sqrt(T_var)
+  
+  # Calculate pooled count
+  pooled_count <- mean(counts, na.rm = TRUE)
+  
+  # Max Cook's distance (extreme across all imputations)
+  max_cooks_d <- max(max_cooks_ds, na.rm = TRUE)
+  
+  # Add results to the pooled results dataframe
+  pooled_results <- rbind(pooled_results, data.frame(
+    Country = country,
+    Pooled_Count = pooled_count,
+    Pooled_Percentage = pooled_percentage,
+    Pooled_SE = pooled_se,
+    Max_Cooks_D = max_cooks_d
+  ))
+  
+  # Store detailed results for debugging
+  all_imputation_results[[country]] <- all_stats
 }
 
 # -----------------------------------------------------------------------------
@@ -2158,49 +2241,50 @@ for (country in countries) {
 print(pooled_results)
 
 # Save pooled results
-write.csv(pooled_results, "pooled_outlier_analysis.csv", row.names = FALSE)
+write.csv(pooled_results, "pooled_cooks_outlier_analysis.csv", row.names = FALSE)
 
 # -----------------------------------------------------------------------------
 
 # Create comparison between pre and post imputation
 comparison <- merge(pre_imputation_outliers, 
                     pooled_results, 
-                    by = c("Country", "Variable"),
+                    by = "Country",
                     suffixes = c("_Pre", "_Post"))
 
 # Calculate difference in percentage
 comparison$Percentage_Diff <- comparison$Pooled_Percentage - comparison$Percentage
 
 # Save comparison
-write.csv(comparison, "outlier_comparison_pre_post_imputation.csv", row.names = FALSE)
+write.csv(comparison, "outlier_comparison_cooks_pre_post_imputation.csv", row.names = FALSE)
 
 # -----------------------------------------------------------------------------
 
 # Visualizations
 if (require(ggplot2)) {
-  # Heat map of outlier percentages after imputation
-  heatmap_post <- ggplot(pooled_results, 
-                         aes(x = Variable, y = Country, fill = Pooled_Percentage)) +
-    geom_tile() +
-    scale_fill_gradient(low = "white", high = "red") +
+  # Bar plot of outlier percentages after imputation
+  bar_post <- ggplot(pooled_results, 
+                     aes(x = Country, y = Pooled_Percentage, fill = Country)) +
+    geom_bar(stat = "identity") +
     theme_minimal() +
-    labs(title = "Percentage of Outliers After Imputation",
-         x = "Variable", y = "Country", fill = "% Outliers")
+    labs(title = "Percentage of Outliers After Imputation (Cook's Distance)",
+         x = "Country", y = "% Outliers") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
   # Save plot
-  ggsave("outlier_heatmap_post_imputation.png", heatmap_post, width = 10, height = 6)
+  ggsave("cooks_outlier_barplot_post_imputation.png", bar_post, width = 10, height = 6)
+  
   # Comparison plot
   if (nrow(comparison) > 0) {
-    comparison_plot <- ggplot(comparison, aes(x = Variable)) +
+    comparison_plot <- ggplot(comparison, aes(x = Country)) +
       geom_point(aes(y = Percentage, color = "Pre-Imputation"), size = 3) +
       geom_point(aes(y = Pooled_Percentage, color = "Post-Imputation"), size = 3) +
-      facet_wrap(~Country) +
       theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-      labs(title = "Comparison of Outlier Percentages Before and After Imputation",
-           x = "Variable", y = "Percentage of Outliers", color = "Stage") +
+      labs(title = "Comparison of Outlier Percentages Before and After Imputation\n(Cook's Distance)",
+           x = "Country", y = "Percentage of Outliers", color = "Stage") +
       scale_color_manual(values = c("Pre-Imputation" = "blue", "Post-Imputation" = "red"))
+    
     # Save plot
-    ggsave("outlier_comparison_plot.png", comparison_plot, width = 12, height = 8)
+    ggsave("cooks_outlier_comparison_plot.png", comparison_plot, width = 12, height = 8)
   }
 }
 
@@ -2357,6 +2441,35 @@ print(descriptive_summary)
 saveRDS(descriptive_results, "pisa_descriptive_statistics.rds")
 saveRDS(descriptive_summary, "pisa_descriptive_summary.rds")
 
+# For OBD: Test if mean differences are significant using 95% CI
+# -----------------------------------------------------------------------------
+
+# List of countries to compare against Norway
+comparison_countries <- c("SWE", "DNK", "FIN", "CHE")
+reference_country <- "NOR"
+
+# Storage for all comparison results
+all_mean_diff_results <- list()
+
+# Run the comparisons
+for (comp_country in comparison_countries) {
+  # Calculate significance of mean differences
+  diff_results <- test_mean_differences_ci(
+    descriptive_summary = descriptive_summary,
+    reference_country = reference_country,
+    comparison_country = comp_country,
+    alpha = 0.05  # 5% significance level
+  )
+  # Store results
+  all_mean_diff_results[[comp_country]] <- diff_results
+  # Print summary
+  cat("\nMean differences between", reference_country, "and", comp_country, ":\n")
+  print(diff_results[, c("Variable", "Mean_Diff", "CI_Lower", "CI_Upper", "Significant")])
+}
+
+# Save results to RDS file
+saveRDS(all_mean_diff_results, file = "mean_difference_significance.rds")
+
 # Skewness, kurtosis and correlations
 # =============================================================================
 
@@ -2456,17 +2569,18 @@ get_correlations <- function(design, variables) {
 compute_descriptive_statistics <- function(imputation_results, countries) {
   results <- list()
   # Define continuous predictors
-  continuous_vars <- c("ANXMAT", "MATHPERS", "MATHEFF", "DISCLIM",
-                       "GROSAGR", "RELATST") # + MATHEF21 + IMMIG + ESCS) 
-  # All variables for correlation
-  all_vars <- c(continuous_vars)
+  continuous_vars <- c("ANXMAT", "MATHPERS", "MATHEFF", "MATHEF21", "DISCLIM",
+                       "GROSAGR", "RELATST")
+  # All variables for correlation (including MATH_PV)
+  all_vars <- c(continuous_vars, "MATH_PV")
   for (country in countries) {
     cat("Processing country:", country, "\n")
     # Initialize storage for pooling
     all_skewness <- list()
     all_kurtosis <- list()
     all_correlations <- list()
-    all_proportions <- list()
+    # Store each PV's correlation matrix separately
+    pv_correlation_list <- list()
     for (pv in 1:10) {
       cat("  Processing PV:", pv, "\n")
       for (imp in 1:10) {
@@ -2475,44 +2589,50 @@ compute_descriptive_statistics <- function(imputation_results, countries) {
         # Create survey design
         design <- create_survey_design(data, country)
         if (!is.null(design)) {
-          # Calculate skewness and kurtosis for continuous variables
+          # Calculate skewness and kurtosis for continuous variables (excluding MATH_PV)
           sk_results <- get_skewness_kurtosis(design, continuous_vars)
           all_skewness[[length(all_skewness) + 1]] <- sk_results$skewness
           all_kurtosis[[length(all_kurtosis) + 1]] <- sk_results$kurtosis
-          # Calculate correlations for all variables
+          # Calculate correlations including current MATH_PV
           cor_results <- get_correlations(design, all_vars)
-          all_correlations[[length(all_correlations) + 1]] <- cor_results
+          pv_correlation_list[[length(pv_correlation_list) + 1]] <- cor_results
         }
       }
     }
-    # For skewness
-    skewness_array <- do.call(rbind, all_skewness)
-    pooled_skewness <- colMeans(skewness_array, na.rm = TRUE)
-    # For kurtosis
-    kurtosis_array <- do.call(rbind, all_kurtosis)
-    pooled_kurtosis <- colMeans(kurtosis_array, na.rm = TRUE)
-    # For correlations (pooling each correlation separately)
+    # Pool skewness and kurtosis (non-PV variables)
+    pooled_skewness <- colMeans(do.call(rbind, all_skewness), na.rm = TRUE)
+    pooled_kurtosis <- colMeans(do.call(rbind, all_kurtosis), na.rm = TRUE)
+    # Pool correlations (special handling for MATH_PV)
+    # Initialize matrix for pooled results
     n_vars <- length(all_vars)
-    pooled_correlations <- matrix(0, nrow = n_vars, ncol = n_vars)
-    rownames(pooled_correlations) <- all_vars
-    colnames(pooled_correlations) <- all_vars
-    for (i in 1:n_vars) {
-      pooled_correlations[i, i] <- 1
-      for (j in 1:n_vars) {
-        if (i != j) {
-          # Extract all values for this specific correlation pair
-          corr_values <- sapply(all_correlations, function(x) x[i, j])
-          pooled_correlations[i, j] <- mean(corr_values, na.rm = TRUE)
-        }
+    pooled_cor <- matrix(NA, nrow = n_vars, ncol = n_vars)
+    rownames(pooled_cor) <- all_vars
+    colnames(pooled_cor) <- all_vars
+    # For non-PV variable correlations (average across all imputations and PVs)
+    for (i in 1:length(continuous_vars)) {
+      for (j in 1:length(continuous_vars)) {
+        var1 <- continuous_vars[i]
+        var2 <- continuous_vars[j]
+        cor_values <- sapply(pv_correlation_list, function(x) x[var1, var2])
+        pooled_cor[var1, var2] <- mean(cor_values, na.rm = TRUE)
       }
     }
+    # For correlations between non-PV variables and MATH_PV
+    # (average across all imputations and PVs)
+    for (var in continuous_vars) {
+      cor_values <- sapply(pv_correlation_list, function(x) x[var, "MATH_PV"])
+      pooled_cor[var, "MATH_PV"] <- mean(cor_values, na.rm = TRUE)
+      pooled_cor["MATH_PV", var] <- mean(cor_values, na.rm = TRUE)
+    }
+    # Set diagonal to 1
+    diag(pooled_cor) <- 1
     # Store results for this country
     results[[country]] <- list(
       continuous_variables = list(
         skewness = pooled_skewness,
         kurtosis = pooled_kurtosis
       ),
-      correlations = pooled_correlations
+      correlations = pooled_cor
     )
   }
   return(results)
@@ -2596,5 +2716,5 @@ summary_table <- data %>%
 print(summary_table, width = Inf)
 
 #######################################
-#             THE END                 #
+#             THANK YOU               #
 #######################################
