@@ -121,7 +121,7 @@ analyze_weighted_predictors <- function(data, predictors) {
   missing_analysis <- lapply(predictors, function(pred) {
     # Define survey design for PISA's complex weighting
     design <- svydesign(
-      id = ~1, # No clustering assumed at this stage
+      ids = ~CNTSCHID,
       weights = ~W_FSTUWT, # Final student weight
       data = data,
       repweights = data[rep_weights], # Replicate weights
